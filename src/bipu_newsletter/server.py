@@ -16,11 +16,12 @@ DB = Path(os.environ.get("NEWSLETTER_DATA_DIR", "./var")) / "newsletter.sqlite3"
 CAMPAIGN = os.environ.get("NEWSLETTER_CAMPAIGN_ID", "bipu-repermission-v0.2")
 
 
-def parse_provider_event(payload: dict) -> Event:
+def parse_provider_event(payload: dict, provider_event_id: str | None = None) -> Event:
     data = payload.get("data") or {}
     tags = data.get("tags") or {}
+    provider_key = provider_event_id or f"fallback:{data.get('email_id') or payload.get('created_at')}:{payload.get('type')}"
     return Event(
-        event_id=f"provider:{data.get('email_id') or payload.get('created_at')}:{payload.get('type')}",
+        event_id=f"provider:{provider_key}",
         event_name=str(payload.get("type") or ""),
         occurred_at=str(payload.get("created_at") or ""),
         campaign_id=tags.get("campaign", CAMPAIGN),
@@ -86,7 +87,7 @@ class Handler(BaseHTTPRequestHandler):
             self.send_json(401, {"error": "invalid_webhook_signature"})
             return
         try:
-            event = parse_provider_event(json.loads(body.decode()))
+            event = parse_provider_event(json.loads(body.decode()), headers["svix-id"])
             inserted = record(connect(DB), event)
         except (ValueError, json.JSONDecodeError):
             self.send_json(400, {"error": "invalid_webhook_payload"})
