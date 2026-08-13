@@ -25,7 +25,7 @@
 
     <section class="offer" aria-labelledby="offer-title">
       <p class="eyebrow">A bounded exchange</p>
-      <h2 id="offer-title">Get the EPUB. Join the work if you want to.</h2>
+      <h2 id="offer-title">Get the book. Choose your format.</h2>
       <p>Enter your email and explicitly opt in to Build in Public University. You will receive the book download immediately and occasional BIPU emails about courses, experiments, and useful things being built in public.</p>
       <p class="quiet">No silent subscription. No selling your address. You can unsubscribe at any time.</p>
       <form id="optin-form">
@@ -64,7 +64,7 @@
         });
         const data = await response.json();
         if (!response.ok) throw new Error(data.error || 'opt_in_failed');
-        status.innerHTML = 'Opt-in recorded. <a href="' + data.download_url + '">Download the EPUB</a>.';
+        status.innerHTML = 'Opt-in recorded. Choose your format: <a href="' + data.download_urls.epub + '">EPUB</a> or <a href="' + data.download_urls.pdf + '">PDF</a>.';
         status.className = 'status success';
         form.reset();
       } catch (error) {

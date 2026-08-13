@@ -55,13 +55,14 @@ class Event:
     consent_scope: str | None = None
     provider_event_id: str | None = None
     provider_email_id: str | None = None
+    download_format: str | None = None
 
     def as_db_tuple(self) -> tuple[Any, ...]:
         return (
             self.event_id, self.event_name, self.occurred_at, self.campaign_id,
             self.batch_id, self.variant, self.source_list, self.cohort,
             self.subscriber_id, self.consent_scope, self.provider_event_id,
-            self.provider_email_id,
+            self.provider_email_id, self.download_format,
         )
 
 
@@ -81,9 +82,15 @@ def connect(path: str | Path) -> sqlite3.Connection:
         subscriber_id TEXT,
         consent_scope TEXT,
         provider_event_id TEXT UNIQUE,
-        provider_email_id TEXT
+        provider_email_id TEXT,
+        download_format TEXT
     )""")
     conn.execute("CREATE INDEX IF NOT EXISTS events_funnel_idx ON events(campaign_id, event_name, source_list, cohort, variant)")
+    try:
+        conn.execute("ALTER TABLE events ADD COLUMN download_format TEXT")
+    except sqlite3.OperationalError as exc:
+        if "duplicate column name" not in str(exc):
+            raise
     conn.execute("""CREATE TABLE IF NOT EXISTS subscribers (
         subscriber_id TEXT PRIMARY KEY,
         email TEXT NOT NULL UNIQUE,
@@ -149,11 +156,13 @@ def entitlement_for_token(conn: sqlite3.Connection, token: str) -> sqlite3.Row |
     ).fetchone()
 
 
-def mark_download(conn: sqlite3.Connection, row: sqlite3.Row, *, completed: bool, occurred_at: str) -> str:
+def mark_download(conn: sqlite3.Connection, row: sqlite3.Row, *, completed: bool, occurred_at: str, download_format: str) -> str:
+    if download_format not in {"epub", "pdf"}:
+        raise ValueError("invalid_download_format")
     column = "download_completed_at" if completed else "download_started_at"
     conn.execute(f"UPDATE book_entitlements SET {column}=COALESCE({column},?) WHERE entitlement_id=?", (occurred_at, row["entitlement_id"]))
     event_name = "book_download_completed" if completed else "book_download_started"
-    event_id = f"{event_name}:{row['entitlement_id']}"
+    event_id = f"{event_name}:{download_format}:{row['entitlement_id']}"
     record(conn, Event(
         event_id=event_id,
         event_name=event_name,
@@ -161,6 +170,7 @@ def mark_download(conn: sqlite3.Connection, row: sqlite3.Row, *, completed: bool
         campaign_id="bipu-lead-magnet-v0.1",
         subscriber_id=row["subscriber_id"],
         consent_scope="bipu_newsletter",
+        download_format=download_format,
     ))
     conn.commit()
     return event_id
@@ -178,7 +188,10 @@ def validate_event(event: Event) -> None:
 def record(conn: sqlite3.Connection, event: Event) -> bool:
     validate_event(event)
     before = conn.total_changes
-    conn.execute("""INSERT OR IGNORE INTO events VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""", event.as_db_tuple())
+    conn.execute("""INSERT OR IGNORE INTO events(
+        event_id,event_name,occurred_at,campaign_id,batch_id,variant,source_list,cohort,
+        subscriber_id,consent_scope,provider_event_id,provider_email_id,download_format
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""", event.as_db_tuple())
     conn.commit()
     return conn.total_changes > before
 
@@ -186,6 +199,10 @@ def record(conn: sqlite3.Connection, event: Event) -> bool:
 def metrics(conn: sqlite3.Connection, campaign_id: str) -> dict[str, Any]:
     rows = conn.execute("SELECT event_name, COUNT(*) AS n FROM events WHERE campaign_id=? GROUP BY event_name", (campaign_id,)).fetchall()
     counts = {row["event_name"]: row["n"] for row in rows}
+    format_rows = conn.execute(
+        "SELECT download_format, COUNT(*) AS n FROM events WHERE campaign_id=? AND event_name='book_download_completed' AND download_format IS NOT NULL GROUP BY download_format",
+        (campaign_id,),
+    ).fetchall()
     def ratio(numerator: str, denominator: str) -> dict[str, Any]:
         n, d = counts.get(numerator, 0), counts.get(denominator, 0)
         return {"numerator": n, "denominator": d, "rate": (n / d if d else None)}
@@ -197,6 +214,7 @@ def metrics(conn: sqlite3.Connection, campaign_id: str) -> dict[str, Any]:
     return {
         "campaign_id": campaign_id,
         "counts": counts,
+        "download_formats": {row["download_format"]: row["n"] for row in format_rows},
         "rates": {
             "opened_per_delivered": ratio("repermission_opened", "repermission_delivered"),
             "optin_per_delivered": ratio("bipu_opt_in_completed", "repermission_delivered"),

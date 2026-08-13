@@ -63,8 +63,8 @@ def test_book_entitlement_requires_consent_and_tracks_download():
     assert result["created"] is True
     row = entitlement_for_token(conn, str(result["token"]))
     assert row is not None
-    mark_download(conn, row, completed=False, occurred_at="2026-08-13T00:01:00Z")
-    mark_download(conn, row, completed=True, occurred_at="2026-08-13T00:02:00Z")
+    mark_download(conn, row, completed=False, occurred_at="2026-08-13T00:01:00Z", download_format="epub")
+    mark_download(conn, row, completed=True, occurred_at="2026-08-13T00:02:00Z", download_format="epub")
     result = metrics(conn, "bipu-lead-magnet-v0.1")
     assert result["counts"]["bipu_opt_in_completed"] == 1
     assert result["counts"]["book_download_completed"] == 1

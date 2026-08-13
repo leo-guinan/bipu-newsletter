@@ -17,6 +17,10 @@ DB = Path(os.environ.get("NEWSLETTER_DATA_DIR", "./var")) / "newsletter.sqlite3"
 CAMPAIGN = os.environ.get("NEWSLETTER_CAMPAIGN_ID", "bipu-repermission-v0.2")
 LEAD_MAGNET_CAMPAIGN = "bipu-lead-magnet-v0.1"
 BOOK_FILE = Path(os.environ.get("BIPU_BOOK_FILE", "./private/manuscript.epub"))
+BOOK_FILES = {
+    "epub": BOOK_FILE,
+    "pdf": Path(os.environ.get("BIPU_BOOK_PDF_FILE", "./private/manuscript.pdf")),
+}
 PUBLIC_SITE = Path(os.environ.get("BIPU_PUBLIC_SITE", "./web"))
 
 
@@ -104,30 +108,33 @@ class Handler(BaseHTTPRequestHandler):
         self.wfile.write(raw)
 
     def download_book(self, token: str) -> None:
-        if not re.fullmatch(r"[A-Za-z0-9_-]{32,64}", token):
+        parts = token.split("/", 1)
+        if len(parts) != 2 or parts[0] not in BOOK_FILES or not re.fullmatch(r"[A-Za-z0-9_-]{32,64}", parts[1]):
             self.send_json(404, {"error": "not_found"})
             return
+        download_format, token = parts
         conn = connect(DB)
         entitlement = entitlement_for_token(conn, token)
         if entitlement is None:
             self.send_json(404, {"error": "entitlement_not_found"})
             return
         try:
-            size = BOOK_FILE.stat().st_size
-            handle = BOOK_FILE.open("rb")
+            book_file = BOOK_FILES[download_format]
+            size = book_file.stat().st_size
+            handle = book_file.open("rb")
         except OSError:
             self.send_json(503, {"error": "book_unavailable"})
             return
-        mark_download(conn, entitlement, completed=False, occurred_at=time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()))
+        mark_download(conn, entitlement, completed=False, occurred_at=time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()), download_format=download_format)
         self.send_response(200)
-        self.send_header("Content-Type", "application/epub+zip")
-        self.send_header("Content-Disposition", 'attachment; filename="the-art-of-time-and-war.epub"')
+        self.send_header("Content-Type", "application/epub+zip" if download_format == "epub" else "application/pdf")
+        self.send_header("Content-Disposition", f'attachment; filename="the-art-of-time-and-war.{download_format}"')
         self.send_header("Content-Length", str(size))
         self.end_headers()
         try:
             while chunk := handle.read(1024 * 64):
                 self.wfile.write(chunk)
-            mark_download(conn, entitlement, completed=True, occurred_at=time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()))
+            mark_download(conn, entitlement, completed=True, occurred_at=time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()), download_format=download_format)
         finally:
             handle.close()
 
@@ -154,7 +161,7 @@ class Handler(BaseHTTPRequestHandler):
             if not token:
                 self.send_json(409, {"error": "entitlement_already_issued"})
                 return
-            self.send_json(201, {"ok": True, "campaign_id": LEAD_MAGNET_CAMPAIGN, "download_url": "/download/" + str(token)})
+            self.send_json(201, {"ok": True, "campaign_id": LEAD_MAGNET_CAMPAIGN, "download_urls": {"epub": "/download/epub/" + str(token), "pdf": "/download/pdf/" + str(token)}})
         except ValueError as exc:
             self.send_json(422, {"error": str(exc)})
         except (json.JSONDecodeError, UnicodeDecodeError):
