@@ -9,6 +9,7 @@ User=bipu-newsletter
 Group=bipu-newsletter
 WorkingDirectory=/opt/bipu-newsletter
 EnvironmentFile=/etc/bipu-newsletter/newsletter.env
+Environment=PYTHONPATH=/opt/bipu-newsletter/src
 ExecStart=/usr/bin/python3 -m bipu_newsletter.server
 Restart=on-failure
 RestartSec=5
