@@ -1,0 +1,13 @@
+[project]
+name = "bipu-newsletter"
+version = "0.1.0"
+description = "Self-hostable, receipt-first newsletter funnel and Resend event ledger"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+dependencies = []
+
+[project.optional-dependencies]
+test = ["pytest>=8.0"]
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
