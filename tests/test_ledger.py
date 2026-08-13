@@ -39,6 +39,12 @@ def test_funnel_metrics_keep_denominators():
     assert result["rates"]["book_download_per_optin"]["rate"] == 1.0
 
 
+def test_provider_event_id_is_preserved():
+    payload = {"type": "email.delivered", "created_at": "2026-08-13T00:00:00Z", "data": {"email_id": "mail-1"}}
+    from bipu_newsletter.server import parse_provider_event
+    assert parse_provider_event(payload, "svix-1").provider_event_id == "svix-1"
+
+
 def test_svix_signature_verification():
     body = b'{"type":"email.delivered"}'
     secret = "whsec_" + base64.b64encode(b"test-secret").decode()

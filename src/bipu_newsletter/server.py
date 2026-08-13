@@ -29,6 +29,7 @@ def parse_provider_event(payload: dict, provider_event_id: str | None = None) ->
         variant=tags.get("variant"),
         source_list=tags.get("source_list"),
         cohort=tags.get("cohort"),
+        provider_event_id=provider_event_id,
         provider_email_id=data.get("email_id"),
     )
 
