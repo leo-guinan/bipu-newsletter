@@ -7,13 +7,17 @@ import hmac
 import json
 import os
 import time
+import re
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
-from .ledger import Event, connect, metrics, record
+from .ledger import Event, connect, create_consent_and_entitlement, entitlement_for_token, mark_download, metrics, record
 
 DB = Path(os.environ.get("NEWSLETTER_DATA_DIR", "./var")) / "newsletter.sqlite3"
 CAMPAIGN = os.environ.get("NEWSLETTER_CAMPAIGN_ID", "bipu-repermission-v0.2")
+LEAD_MAGNET_CAMPAIGN = "bipu-lead-magnet-v0.1"
+BOOK_FILE = Path(os.environ.get("BIPU_BOOK_FILE", "./private/manuscript.epub"))
+PUBLIC_SITE = Path(os.environ.get("BIPU_PUBLIC_SITE", "./web"))
 
 
 def parse_provider_event(payload: dict, provider_event_id: str | None = None) -> Event:
@@ -65,26 +69,105 @@ class Handler(BaseHTTPRequestHandler):
         self.wfile.write(raw)
 
     def do_GET(self) -> None:
+        if self.path in {"/", "/index.html"}:
+            self.serve_file(PUBLIC_SITE / "index.html", "text/html; charset=utf-8")
+            return
         if self.path == "/healthz":
             self.send_json(200, {"ok": True, "campaign_id": CAMPAIGN})
+            return
+        if self.path.startswith("/assets/"):
+            asset = (PUBLIC_SITE / self.path.removeprefix("/" )).resolve()
+            if PUBLIC_SITE.resolve() not in asset.parents:
+                self.send_json(404, {"error": "not_found"})
+                return
+            self.serve_file(asset, "text/css; charset=utf-8")
+            return
+        if self.path.startswith("/download/"):
+            token = self.path.removeprefix("/download/").split("?", 1)[0]
+            self.download_book(token)
             return
         if self.path == "/metrics":
             self.send_json(200, metrics(connect(DB), CAMPAIGN))
             return
         self.send_json(404, {"error": "not_found"})
 
+    def serve_file(self, path: Path, content_type: str) -> None:
+        try:
+            raw = path.read_bytes()
+        except OSError:
+            self.send_json(404, {"error": "not_found"})
+            return
+        self.send_response(200)
+        self.send_header("Content-Type", content_type)
+        self.send_header("Content-Length", str(len(raw)))
+        self.end_headers()
+        self.wfile.write(raw)
+
+    def download_book(self, token: str) -> None:
+        if not re.fullmatch(r"[A-Za-z0-9_-]{32,64}", token):
+            self.send_json(404, {"error": "not_found"})
+            return
+        conn = connect(DB)
+        entitlement = entitlement_for_token(conn, token)
+        if entitlement is None:
+            self.send_json(404, {"error": "entitlement_not_found"})
+            return
+        try:
+            size = BOOK_FILE.stat().st_size
+            handle = BOOK_FILE.open("rb")
+        except OSError:
+            self.send_json(503, {"error": "book_unavailable"})
+            return
+        mark_download(conn, entitlement, completed=False, occurred_at=time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()))
+        self.send_response(200)
+        self.send_header("Content-Type", "application/epub+zip")
+        self.send_header("Content-Disposition", 'attachment; filename="the-art-of-time-and-war.epub"')
+        self.send_header("Content-Length", str(size))
+        self.end_headers()
+        try:
+            while chunk := handle.read(1024 * 64):
+                self.wfile.write(chunk)
+            mark_download(conn, entitlement, completed=True, occurred_at=time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()))
+        finally:
+            handle.close()
+
     def do_POST(self) -> None:
+        if self.path == "/api/opt-in":
+            self.handle_opt_in()
+            return
+        self.handle_webhook()
+
+    def handle_opt_in(self) -> None:
+        length = int(self.headers.get("Content-Length", "0"))
+        if length > 4096:
+            self.send_json(413, {"error": "request_too_large"})
+            return
+        try:
+            payload = json.loads(self.rfile.read(length).decode())
+            if payload.get("consent") is not True:
+                raise ValueError("consent_required")
+            result = create_consent_and_entitlement(
+                connect(DB), email=str(payload.get("email", "")),
+                occurred_at=time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+            )
+            token = result.get("token")
+            if not token:
+                self.send_json(409, {"error": "entitlement_already_issued"})
+                return
+            self.send_json(201, {"ok": True, "campaign_id": LEAD_MAGNET_CAMPAIGN, "download_url": "/download/" + str(token)})
+        except ValueError as exc:
+            self.send_json(422, {"error": str(exc)})
+        except (json.JSONDecodeError, UnicodeDecodeError):
+            self.send_json(400, {"error": "invalid_json"})
+
+    def handle_webhook(self) -> None:
         if self.path != "/webhooks/resend":
             self.send_json(404, {"error": "not_found"})
             return
         length = int(self.headers.get("Content-Length", "0"))
         body = self.rfile.read(length)
         headers = {key.lower(): value for key, value in self.headers.items()}
-        if not verify_svix_signature(
-            body=body,
-            headers=headers,
-            secret=os.environ.get("RESEND_WEBHOOK_SECRET", ""),
-        ):
+        if not verify_svix_signature(body=body, headers=headers, secret=os.environ.get("RESEND_WEBHOOK_SECRET", "")):
             self.send_json(401, {"error": "invalid_webhook_signature"})
             return
         try:

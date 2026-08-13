@@ -5,7 +5,7 @@ import time
 
 import pytest
 
-from bipu_newsletter.ledger import Event, connect, metrics, record
+from bipu_newsletter.ledger import Event, connect, create_consent_and_entitlement, entitlement_for_token, mark_download, metrics, record
 from bipu_newsletter.server import verify_svix_signature
 
 
@@ -55,3 +55,16 @@ def test_svix_signature_verification():
     headers = {"svix-id": message_id, "svix-timestamp": timestamp, "svix-signature": f"v1,{digest}"}
     assert verify_svix_signature(body=body, headers=headers, secret=secret)
     assert not verify_svix_signature(body=b"tampered", headers=headers, secret=secret)
+
+
+def test_book_entitlement_requires_consent_and_tracks_download():
+    conn = connect(":memory:")
+    result = create_consent_and_entitlement(conn, email=" Reader@Example.com ", occurred_at="2026-08-13T00:00:00Z")
+    assert result["created"] is True
+    row = entitlement_for_token(conn, str(result["token"]))
+    assert row is not None
+    mark_download(conn, row, completed=False, occurred_at="2026-08-13T00:01:00Z")
+    mark_download(conn, row, completed=True, occurred_at="2026-08-13T00:02:00Z")
+    result = metrics(conn, "bipu-lead-magnet-v0.1")
+    assert result["counts"]["bipu_opt_in_completed"] == 1
+    assert result["counts"]["book_download_completed"] == 1

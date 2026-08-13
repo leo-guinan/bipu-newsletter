@@ -1,0 +1,79 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="Get The Art of Time and War, a field manual for staying alive while building the future.">
+  <title>The Art of Time and War — Build in Public University</title>
+  <link rel="stylesheet" href="/assets/connect.css">
+</head>
+<body>
+  <main class="shell">
+    <p class="eyebrow">BUILD IN PUBLIC UNIVERSITY · FIELD MANUAL 001</p>
+    <section class="hero">
+      <div>
+        <h1>The war is long.<br><em>Don’t die before the strategy works.</em></h1>
+        <p class="lede">The Art of Time and War is a short field manual for founders, independent builders, creators, and operators who want to build something useful without allowing the meter to run unnoticed.</p>
+        <p class="lede">It is about solvency, supply lines, trust, energy, timing, and the battles that do not need to be fought.</p>
+      </div>
+      <aside class="cover" aria-label="The Art of Time and War book cover">
+        <span>ENTROPY PRESS</span>
+        <strong>THE<br>ART<br>OF TIME<br>AND WAR</strong>
+        <small>LEO GUINAN</small>
+      </aside>
+    </section>
+
+    <section class="offer" aria-labelledby="offer-title">
+      <p class="eyebrow">A bounded exchange</p>
+      <h2 id="offer-title">Get the EPUB. Join the work if you want to.</h2>
+      <p>Enter your email and explicitly opt in to Build in Public University. You will receive the book download immediately and occasional BIPU emails about courses, experiments, and useful things being built in public.</p>
+      <p class="quiet">No silent subscription. No selling your address. You can unsubscribe at any time.</p>
+      <form id="optin-form">
+        <label for="email">Email address</label>
+        <input id="email" name="email" type="email" autocomplete="email" required placeholder="you@example.com">
+        <label class="consent-row">
+          <input id="consent" name="consent" type="checkbox" required>
+          <span>I want to receive BIPU emails, and I understand that this opt-in is what creates my BIPU subscription.</span>
+        </label>
+        <button type="submit">Opt in and get the book <span aria-hidden="true">→</span></button>
+        <p class="form-note">The book is delivered only after this explicit opt-in is recorded.</p>
+        <p id="status" class="status" role="status" aria-live="polite"></p>
+      </form>
+    </section>
+
+    <section class="boundary">
+      <div><strong>What this page measures</strong><span>Consent, entitlement, and download completion.</span></div>
+      <div><strong>What it does not claim</strong><span>That a download is consent, that an open is consent, or that Amazon publication independently proves every underlying rights question.</span></div>
+    </section>
+    <footer><span>BIPU / CONNECT</span><span>Build the artifact. Measure the outcome.</span></footer>
+  </main>
+  <script>
+    const form = document.querySelector('#optin-form');
+    const status = document.querySelector('#status');
+    const button = form.querySelector('button');
+    form.addEventListener('submit', async (event) => {
+      event.preventDefault();
+      status.textContent = 'Recording your opt-in…';
+      status.className = 'status';
+      button.disabled = true;
+      try {
+        const response = await fetch('/api/opt-in', {
+          method: 'POST',
+          headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({email: form.email.value, consent: form.consent.checked})
+        });
+        const data = await response.json();
+        if (!response.ok) throw new Error(data.error || 'opt_in_failed');
+        status.innerHTML = 'Opt-in recorded. <a href="' + data.download_url + '">Download the EPUB</a>.';
+        status.className = 'status success';
+        form.reset();
+      } catch (error) {
+        status.textContent = error.message === 'consent_required' ? 'Please check the consent box to continue.' : 'The opt-in could not be recorded. Please try again.';
+        status.className = 'status error';
+      } finally {
+        button.disabled = false;
+      }
+    });
+  </script>
+</body>
+</html>

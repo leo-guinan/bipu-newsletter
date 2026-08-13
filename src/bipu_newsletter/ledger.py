@@ -2,6 +2,8 @@
 from __future__ import annotations
 
 import json
+import hashlib
+import secrets
 import sqlite3
 from dataclasses import dataclass
 from pathlib import Path
@@ -82,7 +84,86 @@ def connect(path: str | Path) -> sqlite3.Connection:
         provider_email_id TEXT
     )""")
     conn.execute("CREATE INDEX IF NOT EXISTS events_funnel_idx ON events(campaign_id, event_name, source_list, cohort, variant)")
+    conn.execute("""CREATE TABLE IF NOT EXISTS subscribers (
+        subscriber_id TEXT PRIMARY KEY,
+        email TEXT NOT NULL UNIQUE,
+        consent_scope TEXT NOT NULL,
+        consented_at TEXT NOT NULL,
+        unsubscribed_at TEXT
+    )""")
+    conn.execute("""CREATE TABLE IF NOT EXISTS book_entitlements (
+        entitlement_id TEXT PRIMARY KEY,
+        subscriber_id TEXT NOT NULL,
+        token_hash TEXT NOT NULL UNIQUE,
+        issued_at TEXT NOT NULL,
+        download_started_at TEXT,
+        download_completed_at TEXT,
+        FOREIGN KEY(subscriber_id) REFERENCES subscribers(subscriber_id)
+    )""")
     return conn
+
+
+def normalize_email(email: str) -> str:
+    normalized = email.strip().lower()
+    if len(normalized) > 320 or normalized.count("@") != 1:
+        raise ValueError("invalid_email")
+    local, domain = normalized.split("@")
+    if not local or not domain or "." not in domain or any(ch.isspace() for ch in normalized):
+        raise ValueError("invalid_email")
+    return normalized
+
+
+def create_consent_and_entitlement(conn: sqlite3.Connection, *, email: str, occurred_at: str) -> dict[str, str | bool]:
+    normalized = normalize_email(email)
+    existing = conn.execute("SELECT subscriber_id FROM subscribers WHERE email=?", (normalized,)).fetchone()
+    if existing:
+        subscriber_id = str(existing[0])
+    else:
+        subscriber_id = "sub_" + secrets.token_urlsafe(18)
+        conn.execute(
+            "INSERT INTO subscribers(subscriber_id,email,consent_scope,consented_at) VALUES(?,?,?,?)",
+            (subscriber_id, normalized, "bipu_newsletter", occurred_at),
+        )
+        record(conn, Event(
+            event_id="consent:" + subscriber_id,
+            event_name="bipu_opt_in_completed",
+            occurred_at=occurred_at,
+            campaign_id="bipu-lead-magnet-v0.1",
+            subscriber_id=subscriber_id,
+            consent_scope="bipu_newsletter",
+        ))
+    entitlement_id = "ent_" + secrets.token_urlsafe(18)
+    raw_token = secrets.token_urlsafe(32)
+    conn.execute(
+        "INSERT INTO book_entitlements(entitlement_id,subscriber_id,token_hash,issued_at) VALUES(?,?,?,?)",
+        (entitlement_id, subscriber_id, hashlib.sha256(raw_token.encode()).hexdigest(), occurred_at),
+    )
+    conn.commit()
+    return {"subscriber_id": subscriber_id, "entitlement_id": entitlement_id, "token": raw_token, "created": True}
+
+
+def entitlement_for_token(conn: sqlite3.Connection, token: str) -> sqlite3.Row | None:
+    token_hash = hashlib.sha256(token.encode()).hexdigest()
+    return conn.execute(
+        "SELECT * FROM book_entitlements WHERE token_hash=?", (token_hash,)
+    ).fetchone()
+
+
+def mark_download(conn: sqlite3.Connection, row: sqlite3.Row, *, completed: bool, occurred_at: str) -> str:
+    column = "download_completed_at" if completed else "download_started_at"
+    conn.execute(f"UPDATE book_entitlements SET {column}=COALESCE({column},?) WHERE entitlement_id=?", (occurred_at, row["entitlement_id"]))
+    event_name = "book_download_completed" if completed else "book_download_started"
+    event_id = f"{event_name}:{row['entitlement_id']}"
+    record(conn, Event(
+        event_id=event_id,
+        event_name=event_name,
+        occurred_at=occurred_at,
+        campaign_id="bipu-lead-magnet-v0.1",
+        subscriber_id=row["subscriber_id"],
+        consent_scope="bipu_newsletter",
+    ))
+    conn.commit()
+    return event_id
 
 
 def validate_event(event: Event) -> None:
